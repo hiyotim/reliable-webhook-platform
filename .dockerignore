@@ -1,0 +1,33 @@
+# Build context hygiene: keep the image build small and never ship secrets.
+.git
+.github
+.gitignore
+
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+build
+dist
+
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Local PostgreSQL data / generated connection strings.
+.e2e
+pgdata
+
+# Secrets: the real .env is injected through the environment at runtime.
+.env
+.env.*
+!.env.example
+
+# Not needed inside the image (pyproject/README/src/migrations/scripts are).
+tests
+Dockerfile
+.dockerignore
+docker-compose*.yml

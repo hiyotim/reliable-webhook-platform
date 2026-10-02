@@ -1,0 +1,55 @@
+# Override adding the reference receiver and the one-shot end-to-end verifier.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.verify.yml run --rm verify
+#
+# `verify` is profile-gated so a plain `docker compose up` never runs it; naming
+# it on the command line activates it explicitly. To boot it with everything
+# else (it exits 0/non-zero and is not restarted):
+#   docker compose -f docker-compose.yml -f docker-compose.verify.yml \
+#       --profile verify up --build
+
+services:
+  receiver:
+    build:
+      context: .
+    image: reliable-webhook-platform:latest
+    command: ["webhooks-receiver"]
+    environment:
+      RECEIVER_HOST: 0.0.0.0
+      RECEIVER_PORT: "9000"
+    ports:
+      - "9000:9000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import os, urllib.request as u;
+          u.urlopen('http://127.0.0.1:' + os.environ.get('RECEIVER_PORT', '9000') + '/healthz', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  verify:
+    profiles: ["verify"]
+    build:
+      context: .
+    image: reliable-webhook-platform:latest
+    command: ["python3", "scripts/e2e_verify.py"]
+    environment:
+      API_URL: http://api:8000
+      RECEIVER_URL: http://receiver:9000
+      DATABASE_URL: postgresql+asyncpg://webhooks:webhooks@postgres:5432/webhooks
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      receiver:
+        condition: service_healthy
+    restart: "no"
