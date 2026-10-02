@@ -31,9 +31,9 @@ Every failure uses the same envelope:
 | ---- | ------------------ | ----------- |
 | 400  | `invalid_request`  | Bad query value (e.g. unknown `status`), or body/header idempotency keys disagree. |
 | 404  | `not_found`        | Endpoint or event UUID does not exist. |
+| 404  | `http_error`       | Any other Starlette-level `HTTPException`, e.g. an unknown route. |
 | 409  | `conflict`         | Endpoint disabled/deleted; retry of an in-flight, delivered, or already-queued event. |
-| 422  | `validation_error` | Request body or path/query validation failed (pydantic). |
-| 422  | `http_error`       | Other Starlette-level errors (e.g. malformed UUID path). |
+| 422  | `validation_error` | Request body, path or query validation failed (pydantic), malformed UUID included. |
 | 500  | `internal_error`   | Unexpected server error. |
 
 Request bodies are strict (`extra="forbid"`): unknown fields fail with `422`.
