@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+
+  typecheck:
+    name: Type-check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: mypy
+
+  test:
+    name: Tests (pytest + PostgreSQL 16)
+    runs-on: ubuntu-latest
+    env:
+      # Alembic reads DATABASE_URL; the pytest suite prefers TEST_DATABASE_URL
+      # over its embedded PostgreSQL fallback.
+      DATABASE_URL: postgresql+asyncpg://webhooks:webhooks@localhost:5432/webhooks
+      TEST_DATABASE_URL: postgresql+asyncpg://webhooks:webhooks@localhost:5432/webhooks
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: webhooks
+          POSTGRES_PASSWORD: webhooks
+          POSTGRES_DB: webhooks
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U webhooks -d webhooks"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Apply migrations
+        run: alembic upgrade head
+      - name: Check for schema drift
+        run: alembic check
+      - name: Run tests
+        run: pytest -q
+
+  docker:
+    name: Docker build + Compose validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose files
+        run: |
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.verify.yml config -q
+      - name: Build image
+        run: docker build -t reliable-webhook-platform:ci .
+
+  e2e:
+    name: End-to-end (Compose + verify script)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Boot the stack
+        run: docker compose -f docker-compose.yml -f docker-compose.verify.yml up -d --build
+
+      - name: Wait for API readiness
+        run: timeout 180 bash -c 'until curl -fsS http://127.0.0.1:8000/readyz >/dev/null; do sleep 2; done'
+
+      - name: Wait for receiver readiness
+        run: timeout 120 bash -c 'until curl -fsS http://127.0.0.1:9000/healthz >/dev/null; do sleep 2; done'
+
+      - name: Run end-to-end verification
+        run: docker compose -f docker-compose.yml -f docker-compose.verify.yml run --rm verify
+
+      - name: Dump stack logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.verify.yml logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.verify.yml down -v --remove-orphans
